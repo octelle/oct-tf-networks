@@ -1,0 +1,30 @@
+---
+default_language_version:
+  python: python3
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.3.0
+    hooks:
+      - id: check-json
+      - id: check-merge-conflict
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+        exclude: \.+.terraform\/.*$
+      - id: check-yaml
+        args:
+          - '--unsafe'
+      - id: pretty-format-json
+        args:
+          - --autofix
+      - id: detect-private-key
+  - repo: https://github.com/gruntwork-io/pre-commit
+    rev: v0.1.17
+    hooks:
+      - id: terraform-fmt
+        always_run: true
+      - id: tflint
+  - repo: https://github.com/bridgecrewio/checkov.git
+    rev: 2.2.125
+    hooks:
+      - id: checkov
+        always_run: true
