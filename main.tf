@@ -1,65 +1,87 @@
+######################
+# Create VPCs
+#   VPCs are defined in locals.tf
+#   VPCs selected by provided var.environment and var.region
+#   VPCs are created in networking account and use VPC sharing for access in other workload accounts (see sharing.tf)
+######################
 provider "aws" {
   region = var.region
   default_tags {
     tags = local.default_tags
   }
-  profile = "rjs"
+  profile = "rjs-mgmt"
+}
+
+provider "aws" {
+  alias  = "workload"
+  region = var.region
+  assume_role {
+    role_arn     = "arn:aws:iam::${var.accounts[var.environment]}:role/TerraformCloudRole"
+    session_name = "TERRAFORM_CLOUD"
+  }
+  profile = "rjs-mgmt"
+}
+
+provider "aws" {
+  alias  = "deployment"
+  region = var.region
+  assume_role {
+    role_arn     = "arn:aws:iam::${var.accounts.deployment}:role/TerraformCloudRole"
+    session_name = "TERRAFORM_CLOUD"
+  }
+  profile = "rjs-mgmt"
 }
 
 locals {
+  azs           = ["${var.region}a", "${var.region}b", "${var.region}c"]
+  selected_vpcs = { for k, v in local.vpcs : k => v if v.account == var.environment && v.region == var.region }
+
   default_tags = {
-    "automation:CreatedBy"         = "Terraform Cloud"
-    "technical:TerraformWorkspace" = terraform.workspace
+    "automation:CreatedBy" = "Terraform Cloud"
+    "Environment"          = var.environment
   }
   public_subnet_tags  = { Tier = "public" }
   private_subnet_tags = { Tier = "private" }
   intra_subnet_tags   = { Tier = "tgw" }
-  #flow_log_destination_arn = "arn:aws:s3:::bp-vpc-flowlogs-bucket"
-  azs = ["${var.region}a", "${var.region}b", "${var.region}c"]
-
-  selected_vpcs = { for k, v in local.vpcs : k => v if v.account == var.environment && v.region == var.region }
 }
 
-#VPCs defined in locals.tf, selection for each run controlled by supplied var.environment and var.region
-module "vpc" {
+module "shared-vpc" {
   for_each = local.selected_vpcs
-  source   = "terraform-aws-modules/vpc/aws"
-  version  = "~>3.18.1"
+  source   = "./modules/shared-vpc"
 
-  name = each.key
-  cidr = each.value.cidr_block
-  azs  = local.azs
+  name       = each.key
+  short_name = each.value.short_name
+  cidr       = each.value.cidr_block
+  azs        = local.azs
 
-  #using list comprehensions to build lists of cidr blocks and names
-  private_subnets      = concat([for name, cidr in each.value.private_subnets : cidr], [for name, cidr in each.value.deployment_subnets : cidr])
-  private_subnet_names = concat([for name, cidr in each.value.private_subnets : name], [for name, cidr in each.value.deployment_subnets : name])
-  public_subnets       = [for name, cidr in each.value.public_subnets : cidr]
-  public_subnet_names  = [for name, cidr in each.value.public_subnets : name]
-  intra_subnets        = [for name, cidr in each.value.transitgw_subnets : cidr]
-  intra_subnet_names   = [for name, cidr in each.value.transitgw_subnets : name]
+  share_private_subnets_with    = var.accounts[var.environment]
+  share_deployment_subnets_with = var.accounts.deployment
 
+  private_subnets    = each.value.private_subnets
+  public_subnets     = each.value.public_subnets
+  transitgw_subnets  = each.value.transitgw_subnets
+  deployment_subnets = each.value.deployment_subnets
+
+  default_tags        = local.default_tags
   public_subnet_tags  = local.public_subnet_tags
   private_subnet_tags = local.private_subnet_tags
   intra_subnet_tags   = local.intra_subnet_tags
 
-  enable_nat_gateway     = false
+  enable_nat_gateway     = true
   enable_vpn_gateway     = false
   one_nat_gateway_per_az = false
   single_nat_gateway     = true
 
-  enable_flow_log = false
+  enable_flow_log                                 = false
+  flow_log_destination_type                       = "s3"
+  flow_log_destination_arn                        = ""
+  create_flow_log_cloudwatch_log_group            = false
+  create_flow_log_cloudwatch_iam_role             = false
+  flow_log_max_aggregation_interval               = 60
+  flow_log_cloudwatch_log_group_retention_in_days = 1
+
+  providers = {
+    aws.workload   = aws.workload
+    aws.deployment = aws.deployment
+  }
 }
-
-
-###############
-# SSM Ansible stuff #
-###############
-#resource "aws_ssm_document" "oct_ansible" {
-#  name          = "Oct-ApplyAnsiblePlaybooks"
-#  document_type = "Command"
-#  content       = file("ansible-ssm-doc.json")
-#  permissions = {
-#    type        = "Share"
-#    account_ids = "All"
-#  }
-#}
